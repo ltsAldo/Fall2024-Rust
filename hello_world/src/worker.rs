@@ -7,33 +7,51 @@ pub fn worker(
     rx: Arc<Mutex<mpsc::Receiver<String>>>,
     tx: mpsc::Sender<WebsiteStatus>,
     timeout: Duration,
+    max_retries: usize, // New parameter for retries
 ) {
     loop {
-        println!("Worker waiting for URL...");
         let url = {
-            let lock = rx.lock().expect("Failed to lock receiver");
-            let url = lock.recv().ok(); // recv() returns None if the channel is closed
-            drop(lock); // Explicitly release the lock
-            url
+            let lock = rx.lock().unwrap();
+            lock.recv().ok()
         };
 
         if let Some(url) = url {
             println!("Worker processing URL: {}", url);
-            let start = Instant::now();
-            let result = ureq::get(&url)
-                .timeout(timeout)
-                .call()
-                .map(|resp| resp.status())
-                .map_err(|err| err.to_string());
 
-            let response_time = start.elapsed();
-            let status = WebsiteStatus::new(url, result, response_time);
+            let mut attempt = 0;
+            let mut result;
+            let mut response_time;
 
-            println!("Worker finished processing URL: {:?}", status);
-            tx.send(status).expect("Failed to send WebsiteStatus");
+            loop {
+                let start = Instant::now();
+                result = ureq::get(&url)
+                    .timeout(timeout)
+                    .call()
+                    .map(|resp| resp.status())
+                    .map_err(|err| err.to_string());
+                response_time = start.elapsed();
+
+                if result.is_ok() || attempt >= max_retries - 1 {
+                    break;
+                }
+
+                println!(
+                    "Retrying URL: {} (Attempt {}/{})",
+                    url, attempt + 1, max_retries
+                );
+                attempt += 1;
+            }
+
+            let status = WebsiteStatus::new(url.clone(), result, response_time);
+
+            // Send the result back to main
+            if tx.send(status).is_err() {
+                println!("Failed to send result: Receiver dropped.");
+                break;
+            }
         } else {
-            println!("Worker exiting: no more URLs.");
-            break; // Exit loop when channel is closed
+            println!("Worker exiting: No more URLs.");
+            break;
         }
     }
 }

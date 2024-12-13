@@ -1,6 +1,5 @@
 use std::time::{SystemTime, Duration};
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WebsiteStatus {
     pub url: String,
     pub status: Result<u16, String>,
